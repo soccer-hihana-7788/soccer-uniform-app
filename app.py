@@ -42,21 +42,32 @@ if "current_user" not in st.session_state or not st.session_state["current_user"
         st.rerun()
     st.stop()
 
-# --- 2. Google Sheets 認証・接続設定（秘密鍵の自動補正・堅牢化版） ---
+# --- 2. Google Sheets 認証・接続設定（完全自動クレンジング版） ---
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
         
-        # 秘密鍵の文字列を徹底的にクレンジングして正しい形式に補正
-        pk = str(creds_dict.get("private_key", "")).strip()
+        # 秘密鍵を徹底的にクレンジングして正しいPEM形式に強制補正
+        pk = str(creds_dict.get("private_key", ""))
+        
+        # 前後の空白やクォーテーションをすべて削ぎ落とす
+        pk = pk.strip()
+        while (pk.startswith('"') and pk.endswith('"')) or (pk.startswith("'") and pk.endswith("'")):
+            pk = pk[1:-1].strip()
+            
+        # リテラルの "\\n" または不要なエスケープを実際の改行に変換
         if "\\n" in pk:
             pk = pk.replace("\\n", "\n")
-        if pk.startswith('"') and pk.endswith('"'):
-            pk = pk[1:-1]
-        if pk.startswith("'") and pk.endswith("'"):
-            pk = pk[1:-1]
+            
+        # PEMのヘッダーとフッターの間だけを安全に抽出
+        begin_tag = "-----BEGIN PRIVATE KEY-----"
+        end_tag = "-----END PRIVATE KEY-----"
+        if begin_tag in pk and end_tag in pk:
+            start_idx = pk.find(begin_tag)
+            end_idx = pk.find(end_tag) + len(end_tag)
+            pk = pk[start_idx:end_idx]
             
         creds_dict["private_key"] = pk.strip()
         
