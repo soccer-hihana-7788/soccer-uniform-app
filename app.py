@@ -66,7 +66,7 @@ def init_worksheet_if_empty(ws, start_num, end_num):
     if not data:
         rows = []
         for num in range(start_num, end_num + 1):
-            rows.append([num, "", "", "✕", ""]) # [背番号, 名前, 発注日時, 納品, 受け渡し日時]
+            rows.append([num, "", "", "", ""]) # [背番号, 名前, 発注日時, 納品(初期ブランク), 受け渡し日時]
         ws.append_rows(rows)
 
 # --- 4. ページ切り替え（1〜100番 / 101〜200番） ---
@@ -95,6 +95,10 @@ def render_uniform_manager(sheet_name, start_num, end_num):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
 
+    # 納品列のブランク・文字列整列
+    if "納品" in df.columns:
+        df["納品"] = df["納品"].astype(str).fillna("").replace("None", "")
+
     df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
 
     # --- 🔍 上部検索バー（背番号＆名前） ---
@@ -112,7 +116,7 @@ def render_uniform_manager(sheet_name, start_num, end_num):
             display_df['名前'].astype(str).str.contains(term, case=False, na=False)
         ]
 
-    st.info("💡 **操作ガイド**: 各セルをクリックして直接編集が可能です。編集完了後は画面下の「変更を保存する」ボタンを押してください。\n"
+    st.info("💡 **操作ガイド**: 各セルを選択して直接編集が可能です。編集完了後は画面下の「変更を保存する」ボタンを押してください。\n"
             "🔒 **グレーアウト仕様**: 受け渡し日時が入力されている選手は、番号と名前以外の詳細項目が自動的にロック（編集不可）されます。")
 
     edited_df = st.data_editor(
@@ -121,7 +125,7 @@ def render_uniform_manager(sheet_name, start_num, end_num):
             "背番号": st.column_config.NumberColumn("背番号", disabled=True),
             "名前": st.column_config.TextColumn("名前 (選手名)"),
             "発注日時": st.column_config.DateColumn("発注日時 (YYYY-MM-DD)", format="YYYY-MM-DD"),
-            "納品": st.column_config.SelectboxColumn("納品", options=["〇", "✕"], required=True),
+            "納品": st.column_config.SelectboxColumn("納品", options=["", "〇", "✕"], required=False),
             "受け渡し日時": st.column_config.DateColumn("受け渡し日時 (YYYY-MM-DD)", format="YYYY-MM-DD"),
             "is_handed": st.column_config.CheckboxColumn("受け渡し済ロック", disabled=True)
         },
@@ -154,7 +158,7 @@ def render_uniform_manager(sheet_name, start_num, end_num):
                 ord_date = row["発注日時"]
                 ord_str = ord_date.strftime("%Y-%m-%d") if pd.notna(ord_date) and str(ord_date).strip() != "" else ""
                 
-                delivery = str(row["納品"]) if pd.notna(row["納品"]) else "✕"
+                delivery = str(row["納品"]) if pd.notna(row["納品"]) and row["納品"] is not None else ""
                 
                 hand_date = row["受け渡し日時"]
                 hand_str = hand_date.strftime("%Y-%m-%d") if pd.notna(hand_date) and str(hand_date).strip() != "" else ""
