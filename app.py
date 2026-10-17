@@ -32,16 +32,6 @@ if not st.session_state["authenticated"]:
             st.error("IDまたはパスワードが正しくありません。")
     st.stop()
 
-# --- ユーザー氏名の選択 ---
-if "current_user" not in st.session_state or not st.session_state["current_user"]:
-    st.title("👤 担当者 氏名選択")
-    name_list = ["加藤", "瀬野", "平", "稲垣", "富井", "新美", "細川", "島田"]
-    selected_user = st.selectbox("あなたの氏名を選択してください", name_list)
-    if st.button("決定"):
-        st.session_state["current_user"] = selected_user
-        st.rerun()
-    st.stop()
-
 # --- 2. Google Sheets 認証・接続設定 ---
 @st.cache_resource
 def get_gspread_client():
@@ -63,14 +53,8 @@ except Exception as e:
     st.stop()
 
 # --- サイドバー ---
-st.sidebar.write(f"ログイン中の氏名: **{st.session_state['current_user']}**")
-if st.sidebar.button("ユーザー変更"):
-    st.session_state["current_user"] = None
-    st.rerun()
-
 if st.sidebar.button("ログアウト"):
     st.session_state["authenticated"] = False
-    st.session_state["current_user"] = None
     st.rerun()
 
 st.title("⚽ サッカーチーム 背番号管理システム")
@@ -106,18 +90,33 @@ def render_uniform_manager(sheet_name, start_num, end_num):
         st.warning("データが取得できませんでした。")
         return
 
-    # 【堅牢化処理】日付列の型を安全にパースし、空欄エラーを完全に防止
+    # 日付列の安全なパース
     for col in ["発注日時", "受け渡し日時"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
 
     df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
-    
-    st.info("💡 **操作ガイド**: 氏名、発注日時、納品(〇/✕)、受け渡し日時を直接編集できます。編集後は画面下の「変更を保存する」ボタンを押してください。\n"
+
+    # --- 🔍 上部検索バー（背番号＆名前） ---
+    search_term = st.text_input(
+        "🔍 背番号または名前で検索（該当する選手のみ絞り込まれます）", 
+        key=f"search_{sheet_name}",
+        placeholder="例: 10 や 山田 など"
+    )
+
+    display_df = df.copy()
+    if search_term.strip():
+        term = search_term.strip().lower()
+        display_df = display_df[
+            display_df['背番号'].astype(str).str.contains(term, case=False, na=False) |
+            display_df['名前'].astype(str).str.contains(term, case=False, na=False)
+        ]
+
+    st.info("💡 **操作ガイド**: 各セルをクリックして直接編集が可能です。編集完了後は画面下の「変更を保存する」ボタンを押してください。\n"
             "🔒 **グレーアウト仕様**: 受け渡し日時が入力されている選手は、番号と名前以外の詳細項目が自動的にロック（編集不可）されます。")
 
     edited_df = st.data_editor(
-        df[["背番号", "名前", "発注日時", "納品", "受け渡し日時", "is_handed"]],
+        display_df[["背番号", "名前", "発注日時", "納品", "受け渡し日時", "is_handed"]],
         column_config={
             "背番号": st.column_config.NumberColumn("背番号", disabled=True),
             "名前": st.column_config.TextColumn("名前 (選手名)"),
@@ -134,8 +133,21 @@ def render_uniform_manager(sheet_name, start_num, end_num):
 
     if st.button("💾 変更をスプレッドシートに保存", key=f"save_{sheet_name}"):
         try:
+            # 検索表示中であっても元のDataFrameに編集結果をマージして保存
+            updated_full_df = df.set_index("背番号")
+            edited_set = edited_df.set_index("背番号")
+            
+            for b_num, row in edited_set.iterrows():
+                if b_num in updated_full_df.index:
+                    updated_full_df.loc[b_num, "名前"] = row["名前"]
+                    updated_full_df.loc[b_num, "発注日時"] = row["発注日時"]
+                    updated_full_df.loc[b_num, "納品"] = row["納品"]
+                    updated_full_df.loc[b_num, "受け渡し日時"] = row["受け渡し日時"]
+            
+            updated_full_df = updated_full_df.reset_index()
+
             update_rows = []
-            for idx, row in edited_df.iterrows():
+            for idx, row in updated_full_df.iterrows():
                 b_num = row["背番号"]
                 name = str(row["名前"]) if pd.notna(row["名前"]) else ""
                 
