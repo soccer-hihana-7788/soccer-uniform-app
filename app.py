@@ -43,34 +43,28 @@ if "current_user" not in st.session_state or not st.session_state["current_user"
         st.rerun()
     st.stop()
 
-# --- 2. Google Sheets 認証・接続設定（PEM再構築版） ---
+# --- 2. Google Sheets 認証・接続設定（二重コピー・ゴミデータの完全自動カット版） ---
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
         
-        # 秘密鍵の文字列から純粋なBase64本文だけを抽出してPEM形式を完全再構築
+        # 秘密鍵の文字列を取得
         raw_key = str(creds_dict.get("private_key", ""))
         
-        # エスケープ文字や改行をすべて除去
+        # リテラルの "\\n" を実際の改行に変換
         raw_key = raw_key.replace("\\n", "\n").replace("\r", "")
         
-        # ヘッダー/フッターを除いたBase64のボディ部分のみ抽出
-        lines = [line.strip() for line in raw_key.split("\n") if line.strip()]
-        body_lines = [
-            line for line in lines 
-            if not line.startswith("-----BEGIN") and not line.startswith("-----END")
-        ]
+        # 【最重要】二重コピーや余分なゴミデータが混入していても、最初の1セットだけを強制抽出する
+        match = re.search(r'(-----BEGIN PRIVATE KEY-----.*?-----END PRIVATE KEY-----)', raw_key, re.DOTALL)
+        if match:
+            clean_key = match.group(1)
+        else:
+            clean_key = raw_key.strip()
+            
+        creds_dict["private_key"] = clean_key
         
-        # 抽出したBase64文字列を連結
-        clean_body = "".join(body_lines).replace(" ", "")
-        
-        # 64文字ごとに改行して正しいPEM形式を生成
-        formatted_body = "\n".join([clean_body[i:i+64] for i in range(0, len(clean_body), 64)])
-        pem_key = f"-----BEGIN PRIVATE KEY-----\n{formatted_body}\n-----END PRIVATE KEY-----\n"
-        
-        creds_dict["private_key"] = pem_key
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
     else:
         key_file = "credentials.json"
