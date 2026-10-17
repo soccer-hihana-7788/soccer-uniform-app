@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime
 import time
 
 # --- ページ設定 ---
@@ -105,7 +106,12 @@ def render_uniform_manager(sheet_name, start_num, end_num):
         st.warning("データが取得できませんでした。")
         return
 
-    df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if str(x).strip() != "" and pd.notna(x) else False)
+    # 【堅牢化処理】日付列の型を安全にパースし、空欄エラーを完全に防止
+    for col in ["発注日時", "受け渡し日時"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
+
+    df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
     
     st.info("💡 **操作ガイド**: 氏名、発注日時、納品(〇/✕)、受け渡し日時を直接編集できます。編集後は画面下の「変更を保存する」ボタンを押してください。\n"
             "🔒 **グレーアウト仕様**: 受け渡し日時が入力されている選手は、番号と名前以外の詳細項目が自動的にロック（編集不可）されます。")
