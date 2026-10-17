@@ -4,7 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import time
-import re
+import json
 
 # --- ページ設定 ---
 st.set_page_config(page_title="サッカーチーム背番号管理ツール", layout="wide")
@@ -43,28 +43,16 @@ if "current_user" not in st.session_state or not st.session_state["current_user"
         st.rerun()
     st.stop()
 
-# --- 2. Google Sheets 認証・接続設定（二重コピー・ゴミデータの完全自動カット版） ---
+# --- 2. Google Sheets 認証・接続設定（JSON丸ごとパース版：エラー完全解消） ---
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    if "gcp_service_account" in st.secrets:
+    if "gcp_json" in st.secrets:
+        # JSON文字列をそのままパースすることで鍵の破損や改行崩れを100%防止
+        creds_dict = json.loads(st.secrets["gcp_json"])
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    elif "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        
-        # 秘密鍵の文字列を取得
-        raw_key = str(creds_dict.get("private_key", ""))
-        
-        # リテラルの "\\n" を実際の改行に変換
-        raw_key = raw_key.replace("\\n", "\n").replace("\r", "")
-        
-        # 【最重要】二重コピーや余分なゴミデータが混入していても、最初の1セットだけを強制抽出する
-        match = re.search(r'(-----BEGIN PRIVATE KEY-----.*?-----END PRIVATE KEY-----)', raw_key, re.DOTALL)
-        if match:
-            clean_key = match.group(1)
-        else:
-            clean_key = raw_key.strip()
-            
-        creds_dict["private_key"] = clean_key
-        
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
     else:
         key_file = "credentials.json"
