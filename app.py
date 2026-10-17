@@ -66,15 +66,11 @@ def init_worksheet_if_empty(ws, start_num, end_num):
     if not data:
         rows = []
         for num in range(start_num, end_num + 1):
-            rows.append([num, "", "", "", ""]) # [背番号, 名前, 発注日時, 納品(初期ブランク), 受け渡し日時]
+            rows.append([num, "", "", "", ""]) # [背番号, 名前, 発注日時, 納品(初期None/空), 受け渡し日時]
         ws.append_rows(rows)
 
-# --- 4. ページ切り替え（1〜100番 / 101〜200番） ---
-tab1, tab2 = st.tabs(["👕 1 〜 100番 管理", "👕 101 〜 200番 管理"])
-
-def render_uniform_manager(sheet_name, start_num, end_num):
-    st.subheader(f"背番号 {start_num} 〜 {end_num} 一覧管理")
-    
+# --- 4. ワークシートデータ取得用ヘルパー ---
+def load_sheet_data(sheet_name, start_num, end_num):
     try:
         ws = sh.worksheet(sheet_name)
     except Exception:
@@ -82,24 +78,81 @@ def render_uniform_manager(sheet_name, start_num, end_num):
         ws.append_row(["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
 
     init_worksheet_if_empty(ws, start_num, end_num)
-    
     records = ws.get_all_records()
     df = pd.DataFrame(records)
     
     if df.empty:
-        st.warning("データが取得できませんでした。")
-        return
+        return ws, df
 
     # 日付列の安全なパース
     for col in ["発注日時", "受け渡し日時"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
 
-    # 納品列のブランク・文字列整列
+    # 納品列の表示調整（✕を初期値にせず、未入力状態Noneを維持）
     if "納品" in df.columns:
-        df["納品"] = df["納品"].astype(str).fillna("").replace("None", "")
+        df["納品"] = df["納品"].astype(str).replace({"✕": None, "None": None, "": None, "nan": None})
 
     df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
+    return ws, df
+
+# --- 5. ページ切り替え（利用中 / 1〜100番 / 101〜200番） ---
+tab_active, tab1, tab2 = st.tabs(["🔥 利用中", "👕 1 〜 100番 管理", "👕 101 〜 200番 管理"])
+
+# --- 【タブ0: 利用中一覧（1〜100, 101〜200から名前登録ありのものを自動反映）】 ---
+with tab_active:
+    st.subheader("🔥 利用中 背番号一覧")
+    
+    _, df1 = load_sheet_data("1_100", 1, 100)
+    _, df2 = load_sheet_data("101_200", 101, 200)
+    
+    all_df = pd.concat([df1, df2], ignore_index=True)
+    
+    if not all_df.empty:
+        # 名前が空でない（登録されている）行のみ抽出
+        active_df = all_df[all_df["名前"].astype(str).str.strip() != ""].copy()
+        
+        # 検索バー
+        search_active = st.text_input(
+            "🔍 利用中の背番号または名前で検索", 
+            key="search_active",
+            placeholder="例: 10 や 山田 など"
+        )
+        if search_active.strip():
+            term = search_active.strip().lower()
+            active_df = active_df[
+                active_df['背番号'].astype(str).str.contains(term, case=False, na=False) |
+                active_df['名前'].astype(str).str.contains(term, case=False, na=False)
+            ]
+        
+        if active_df.empty:
+            st.info("現在利用中の背番号はありません。")
+        else:
+            st.data_editor(
+                active_df[["背番号", "名前", "発注日時", "納品", "受け渡し日時", "is_handed"]],
+                column_config={
+                    "背番号": st.column_config.NumberColumn("背番号", disabled=True),
+                    "名前": st.column_config.TextColumn("名前 (選手名)", disabled=True),
+                    "発注日時": st.column_config.DateColumn("発注日時 (YYYY-MM-DD)", format="YYYY-MM-DD", disabled=True),
+                    "納品": st.column_config.SelectboxColumn("納品", options=[None, "〇", "✕"], disabled=True),
+                    "受け渡し日時": st.column_config.DateColumn("受け渡し日時 (YYYY-MM-DD)", format="YYYY-MM-DD", disabled=True),
+                    "is_handed": st.column_config.CheckboxColumn("受け渡し済ロック", disabled=True)
+                },
+                disabled=True,
+                hide_index=True,
+                use_container_width=True,
+                key="editor_active_view"
+            )
+
+# --- 背番号管理画面描画関数 ---
+def render_uniform_manager(sheet_name, start_num, end_num):
+    st.subheader(f"背番号 {start_num} 〜 {end_num} 一覧管理")
+    
+    ws, df = load_sheet_data(sheet_name, start_num, end_num)
+    
+    if df.empty:
+        st.warning("データが取得できませんでした。")
+        return
 
     # --- 🔍 上部検索バー（背番号＆名前） ---
     search_term = st.text_input(
@@ -125,7 +178,7 @@ def render_uniform_manager(sheet_name, start_num, end_num):
             "背番号": st.column_config.NumberColumn("背番号", disabled=True),
             "名前": st.column_config.TextColumn("名前 (選手名)"),
             "発注日時": st.column_config.DateColumn("発注日時 (YYYY-MM-DD)", format="YYYY-MM-DD"),
-            "納品": st.column_config.SelectboxColumn("納品", options=["", "〇", "✕"], required=False),
+            "納品": st.column_config.SelectboxColumn("納品", options=[None, "〇", "✕"], required=False),
             "受け渡し日時": st.column_config.DateColumn("受け渡し日時 (YYYY-MM-DD)", format="YYYY-MM-DD"),
             "is_handed": st.column_config.CheckboxColumn("受け渡し済ロック", disabled=True)
         },
@@ -158,7 +211,7 @@ def render_uniform_manager(sheet_name, start_num, end_num):
                 ord_date = row["発注日時"]
                 ord_str = ord_date.strftime("%Y-%m-%d") if pd.notna(ord_date) and str(ord_date).strip() != "" else ""
                 
-                delivery = str(row["納品"]) if pd.notna(row["納品"]) and row["納品"] is not None else ""
+                delivery = str(row["納品"]) if pd.notna(row["納品"]) and row["納品"] is not None and str(row["納品"]) != "None" else ""
                 
                 hand_date = row["受け渡し日時"]
                 hand_str = hand_date.strftime("%Y-%m-%d") if pd.notna(hand_date) and str(hand_date).strip() != "" else ""
