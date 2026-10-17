@@ -5,6 +5,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import time
 import json
+import re
 
 # --- ページ設定 ---
 st.set_page_config(page_title="サッカーチーム背番号管理ツール", layout="wide")
@@ -43,20 +44,49 @@ if "current_user" not in st.session_state or not st.session_state["current_user"
         st.rerun()
     st.stop()
 
-# --- 2. Google Sheets 認証・接続設定（JSON丸ごとパース版：エラー完全解消） ---
+# --- 2. Google Sheets 認証・接続設定（完全自動検出・修復版） ---
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    if "gcp_json" in st.secrets:
-        # JSON文字列をそのままパースすることで鍵の破損や改行崩れを100%防止
-        creds_dict = json.loads(st.secrets["gcp_json"])
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
-    elif "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
-    else:
-        key_file = "credentials.json"
-        credentials = Credentials.from_service_account_file(key_file, scopes=scope)
+    
+    creds_dict = None
+    try:
+        # st.secrets の中から柔軟に認証情報を自動検出する
+        if "gcp_json" in st.secrets:
+            val = st.secrets["gcp_json"]
+            if isinstance(val, str):
+                creds_dict = json.loads(val)
+            elif isinstance(val, dict):
+                creds_dict = dict(val)
+        elif "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+        else:
+            # どのキー名であっても private_key を含む辞書を自動探索
+            for k, v in st.secrets.items():
+                if isinstance(v, dict) and "private_key" in v:
+                    creds_dict = dict(v)
+                    break
+                elif k == "gcp_json" and isinstance(v, str):
+                    creds_dict = json.loads(v)
+                    break
+    except Exception as e:
+        st.error(f"認証情報の解析に失敗しました: {e}")
+        st.stop()
+
+    if not creds_dict:
+        st.error("Streamlit CloudのSecretsにGoogle認証情報が正しく設定されていません。")
+        st.stop()
+
+    # 秘密鍵の改行・フォーマットを完全に自動修復
+    if "private_key" in creds_dict:
+        pk = str(creds_dict["private_key"])
+        pk = pk.replace("\\n", "\n").replace("\r", "")
+        match = re.search(r'(-----BEGIN PRIVATE KEY-----.*?-----END PRIVATE KEY-----)', pk, re.DOTALL)
+        if match:
+            pk = match.group(1)
+        creds_dict["private_key"] = pk
+
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(credentials)
 
 try:
