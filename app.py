@@ -18,7 +18,6 @@ if not st.session_state["authenticated"]:
     password = st.text_input("パスワード", type="password")
     
     if st.button("ログイン"):
-        # st.secrets から安全にID・パスワードを取得して照合
         try:
             correct_user = st.secrets["auth"]["user_id"]
             correct_password = st.secrets["auth"]["password"]
@@ -43,13 +42,19 @@ if "current_user" not in st.session_state or not st.session_state["current_user"
         st.rerun()
     st.stop()
 
-# --- 2. Google Sheets 認証・接続設定 ---
+# --- 2. Google Sheets 認証・接続設定（修正版：鍵フォーマットを自動整形） ---
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        
+        # 秘密鍵のフォーマット揺れを吸収して安全に復元
+        private_key = creds_dict["private_key"].strip()
+        if "\\n" in private_key:
+            private_key = private_key.replace("\\n", "\n")
+        creds_dict["private_key"] = private_key
+        
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
     else:
         key_file = "credentials.json"
