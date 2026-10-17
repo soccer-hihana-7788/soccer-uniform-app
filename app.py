@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import time
+import re
 
 # --- ページ設定 ---
 st.set_page_config(page_title="サッカーチーム背番号管理ツール", layout="wide")
@@ -42,35 +43,34 @@ if "current_user" not in st.session_state or not st.session_state["current_user"
         st.rerun()
     st.stop()
 
-# --- 2. Google Sheets 認証・接続設定（完全自動クレンジング版） ---
+# --- 2. Google Sheets 認証・接続設定（PEM再構築版） ---
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
         
-        # 秘密鍵を徹底的にクレンジングして正しいPEM形式に強制補正
-        pk = str(creds_dict.get("private_key", ""))
+        # 秘密鍵の文字列から純粋なBase64本文だけを抽出してPEM形式を完全再構築
+        raw_key = str(creds_dict.get("private_key", ""))
         
-        # 前後の空白やクォーテーションをすべて削ぎ落とす
-        pk = pk.strip()
-        while (pk.startswith('"') and pk.endswith('"')) or (pk.startswith("'") and pk.endswith("'")):
-            pk = pk[1:-1].strip()
-            
-        # リテラルの "\\n" または不要なエスケープを実際の改行に変換
-        if "\\n" in pk:
-            pk = pk.replace("\\n", "\n")
-            
-        # PEMのヘッダーとフッターの間だけを安全に抽出
-        begin_tag = "-----BEGIN PRIVATE KEY-----"
-        end_tag = "-----END PRIVATE KEY-----"
-        if begin_tag in pk and end_tag in pk:
-            start_idx = pk.find(begin_tag)
-            end_idx = pk.find(end_tag) + len(end_tag)
-            pk = pk[start_idx:end_idx]
-            
-        creds_dict["private_key"] = pk.strip()
+        # エスケープ文字や改行をすべて除去
+        raw_key = raw_key.replace("\\n", "\n").replace("\r", "")
         
+        # ヘッダー/フッターを除いたBase64のボディ部分のみ抽出
+        lines = [line.strip() for line in raw_key.split("\n") if line.strip()]
+        body_lines = [
+            line for line in lines 
+            if not line.startswith("-----BEGIN") and not line.startswith("-----END")
+        ]
+        
+        # 抽出したBase64文字列を連結
+        clean_body = "".join(body_lines).replace(" ", "")
+        
+        # 64文字ごとに改行して正しいPEM形式を生成
+        formatted_body = "\n".join([clean_body[i:i+64] for i in range(0, len(clean_body), 64)])
+        pem_key = f"-----BEGIN PRIVATE KEY-----\n{formatted_body}\n-----END PRIVATE KEY-----\n"
+        
+        creds_dict["private_key"] = pem_key
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
     else:
         key_file = "credentials.json"
