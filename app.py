@@ -60,14 +60,33 @@ if st.sidebar.button("ログアウト"):
 st.title("⚽ サッカーチーム 背番号管理システム")
 st.markdown("---")
 
+# --- 安全なレコード取得用ヘルパー（API制限・レートリミット自動リトライ対策） ---
+def safe_get_all_records(ws):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return ws.get_all_records()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep(1.0 * (attempt + 1))
+
 # --- 3. 初期データ自動生成関数 ---
 def init_worksheet_if_empty(ws, start_num, end_num):
-    data = ws.get_all_records()
+    try:
+        data = safe_get_all_records(ws)
+    except Exception:
+        data = []
+        
     if not data:
         rows = []
         for num in range(start_num, end_num + 1):
-            rows.append([num, "", "", "", ""]) # [背番号, 名前, 発注日時, 納品(初期None/空), 受け渡し日時]
-        ws.append_rows(rows)
+            rows.append([num, "", "", "", ""]) # [背番号, 名前, 発注日時, 納品, 受け渡し日時]
+        try:
+            ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
+            ws.append_rows(rows)
+        except Exception:
+            pass
 
 # --- 4. ワークシートデータ取得用ヘルパー ---
 def load_sheet_data(sheet_name, start_num, end_num):
@@ -78,28 +97,43 @@ def load_sheet_data(sheet_name, start_num, end_num):
         ws.append_row(["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
 
     init_worksheet_if_empty(ws, start_num, end_num)
-    records = ws.get_all_records()
+    
+    try:
+        records = safe_get_all_records(ws)
+    except Exception as e:
+        st.error(f"シート '{sheet_name}' の読み込みに失敗しました（API制限の可能性があります。少し待って再読み込みしてください）: {e}")
+        return ws, pd.DataFrame()
+
     df = pd.DataFrame(records)
     
-    if df.empty:
-        return ws, df
+    if df.empty or "背番号" not in df.columns:
+        init_worksheet_if_empty(ws, start_num, end_num)
+        try:
+            records = safe_get_all_records(ws)
+            df = pd.DataFrame(records)
+        except Exception:
+            df = pd.DataFrame()
 
     # 日付列の安全なパース
     for col in ["発注日時", "受け渡し日時"]:
-        if col in df.columns:
+        if col in df.columns and not df.empty:
             df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
 
-    # 納品列の表示調整（✕を初期値にせず、未入力状態Noneを維持）
-    if "納品" in df.columns:
+    # 納品列の表示調整
+    if "納品" in df.columns and not df.empty:
         df["納品"] = df["納品"].astype(str).replace({"✕": None, "None": None, "": None, "nan": None})
 
-    df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
+    if not df.empty and "受け渡し日時" in df.columns:
+        df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
+    else:
+        df['is_handed'] = False
+        
     return ws, df
 
 # --- 5. ページ切り替え（利用中 / 1〜100番 / 101〜200番） ---
 tab_active, tab1, tab2 = st.tabs(["🔥 利用中", "👕 1 〜 100番 管理", "👕 101 〜 200番 管理"])
 
-# --- 【タブ0: 利用中一覧（1〜100, 101〜200から名前登録ありのものを自動反映）】 ---
+# --- 【タブ0: 利用中一覧】 ---
 with tab_active:
     st.subheader("🔥 利用中 背番号一覧")
     
@@ -109,10 +143,8 @@ with tab_active:
     all_df = pd.concat([df1, df2], ignore_index=True)
     
     if not all_df.empty:
-        # 名前が空でない（登録されている）行のみ抽出
         active_df = all_df[all_df["名前"].astype(str).str.strip() != ""].copy()
         
-        # 検索バー
         search_active = st.text_input(
             "🔍 利用中の背番号または名前で検索", 
             key="search_active",
@@ -154,7 +186,6 @@ def render_uniform_manager(sheet_name, start_num, end_num):
         st.warning("データが取得できませんでした。")
         return
 
-    # --- 🔍 上部検索バー（背番号＆名前） ---
     search_term = st.text_input(
         "🔍 背番号または名前で検索（該当する選手のみ絞り込まれます）", 
         key=f"search_{sheet_name}",
@@ -190,7 +221,6 @@ def render_uniform_manager(sheet_name, start_num, end_num):
 
     if st.button("💾 変更をスプレッドシートに保存", key=f"save_{sheet_name}"):
         try:
-            # 検索表示中であっても元のDataFrameに編集結果をマージして保存
             updated_full_df = df.set_index("背番号")
             edited_set = edited_df.set_index("背番号")
             
