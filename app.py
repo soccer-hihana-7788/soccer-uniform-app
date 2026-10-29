@@ -56,26 +56,41 @@ except Exception as e:
 if st.sidebar.button("ログアウト"):
     st.session_state["authenticated"] = False
     for key in list(st.session_state.keys()):
-        if key.startswith("cache_df_"):
+        if key.startswith("cache_df_") or key == "ws_cache":
             del st.session_state[key]
     st.rerun()
 
 st.title("⚽ サッカーチーム 背番号管理システム")
 st.markdown("---")
 
-# --- 安全なAPI実行ラッパー ---
+# --- 429エラー（利用制限）を完全に防ぐための安全なAPIラッパー・スロットリング ---
 def safe_api_call(func, *args, **kwargs):
-    max_retries = 4
+    max_retries = 5
     for attempt in range(max_retries):
         try:
+            # 連続呼び出しによる429を防ぐためのマイクロウェイト
+            time.sleep(0.3)
             return func(*args, **kwargs)
         except Exception as e:
-            if attempt == max_retries - 1:
-                raise e
-            time.sleep(1.5 * (attempt + 1))
+            err_str = str(e)
+            if "429" in err_str or "Quota exceeded" in err_str:
+                if attempt == max_retries - 1:
+                    raise e
+                # 制限に引っかかった場合は待機時間を倍増させてリトライ
+                time.sleep(2.0 * (attempt + 1))
+            else:
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(1.0)
 
-# --- ワークシートの取得 ---
+# --- ワークシートの安全な取得キャッシュ ---
 def get_or_create_worksheet(sheet_name, start_num, end_num):
+    if "ws_cache" not in st.session_state:
+        st.session_state["ws_cache"] = {}
+        
+    if sheet_name in st.session_state["ws_cache"]:
+        return st.session_state["ws_cache"][sheet_name]
+
     def _get_ws():
         try:
             return sh.worksheet(sheet_name)
@@ -88,7 +103,9 @@ def get_or_create_worksheet(sheet_name, start_num, end_num):
             ws.append_rows(rows)
             return ws
 
-    return safe_api_call(_get_ws)
+    ws = safe_api_call(_get_ws)
+    st.session_state["ws_cache"][sheet_name] = ws
+    return ws
 
 # --- セッションステートを利用した高速・API制限完全回避データロード ---
 def load_sheet_data(sheet_name, start_num, end_num):
@@ -255,6 +272,10 @@ def render_uniform_manager(sheet_name, start_num, end_num):
             
             updated_full_df['is_handed'] = updated_full_df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
             st.session_state[f"cache_df_{sheet_name}"] = updated_full_df
+            # 利用中タブ側や他タブのキャッシュも同期させるためにクリア
+            for k in list(st.session_state.keys()):
+                if k.startswith("cache_df_") and k != f"cache_df_{sheet_name}":
+                    del st.session_state[k]
             
             st.success("スプレッドシートのデータを正常に更新しました！")
             time.sleep(0.1)
