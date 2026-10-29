@@ -60,59 +60,58 @@ if st.sidebar.button("ログアウト"):
 st.title("⚽ サッカーチーム 背番号管理システム")
 st.markdown("---")
 
-# --- 安全なレコード取得用ヘルパー（API制限・レートリミット自動リトライ対策） ---
-def safe_get_all_records(ws):
-    max_retries = 3
+# --- 安全なAPI実行ラッパー（連続操作・レートリミット対策） ---
+def safe_api_call(func, *args, **kwargs):
+    max_retries = 4
     for attempt in range(max_retries):
         try:
-            return ws.get_all_records()
+            return func(*args, **kwargs)
         except Exception as e:
             if attempt == max_retries - 1:
                 raise e
             time.sleep(1.0 * (attempt + 1))
 
-# --- 3. 初期データ自動生成関数 ---
-def init_worksheet_if_empty(ws, start_num, end_num):
-    try:
-        data = safe_get_all_records(ws)
-    except Exception:
-        data = []
-        
-    if not data:
-        rows = []
-        for num in range(start_num, end_num + 1):
-            rows.append([num, "", "", "", ""]) # [背番号, 名前, 発注日時, 納品, 受け渡し日時]
+# --- ワークシートの安全な取得または作成 ---
+def get_or_create_worksheet(sheet_name, start_num, end_num):
+    def _get_ws():
         try:
+            return sh.worksheet(sheet_name)
+        except Exception:
+            ws = sh.add_worksheet(title=sheet_name, rows=200, cols=10)
+            ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
+            rows = []
+            for num in range(start_num, end_num + 1):
+                rows.append([num, "", "", "", ""])
+            ws.append_rows(rows)
+            return ws
+
+    return safe_api_call(_get_ws)
+
+# --- データ取得ヘルパー（高速化・リトライ対応） ---
+def load_sheet_data(sheet_name, start_num, end_num):
+    ws = get_or_create_worksheet(sheet_name, start_num, end_num)
+    
+    def _get_records():
+        records = ws.get_all_records()
+        if not records:
+            rows = []
+            for num in range(start_num, end_num + 1):
+                rows.append([num, "", "", "", ""])
             ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
             ws.append_rows(rows)
-        except Exception:
-            pass
+            records = ws.get_all_records()
+        return records
 
-# --- 4. ワークシートデータ取得用ヘルパー ---
-def load_sheet_data(sheet_name, start_num, end_num):
     try:
-        ws = sh.worksheet(sheet_name)
-    except Exception:
-        ws = sh.add_worksheet(title=sheet_name, rows=200, cols=10)
-        ws.append_row(["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
-
-    init_worksheet_if_empty(ws, start_num, end_num)
-    
-    try:
-        records = safe_get_all_records(ws)
+        records = safe_api_call(_get_records)
     except Exception as e:
-        st.error(f"シート '{sheet_name}' の読み込みに失敗しました（API制限の可能性があります。少し待って再読み込みしてください）: {e}")
+        st.error(f"シート '{sheet_name}' の読み込みに失敗しました: {e}")
         return ws, pd.DataFrame()
 
     df = pd.DataFrame(records)
     
     if df.empty or "背番号" not in df.columns:
-        init_worksheet_if_empty(ws, start_num, end_num)
-        try:
-            records = safe_get_all_records(ws)
-            df = pd.DataFrame(records)
-        except Exception:
-            df = pd.DataFrame()
+        df = pd.DataFrame(columns=["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
 
     # 日付列の安全なパース
     for col in ["発注日時", "受け渡し日時"]:
@@ -248,10 +247,10 @@ def render_uniform_manager(sheet_name, start_num, end_num):
                 
                 update_rows.append([int(b_num), name, ord_str, delivery, hand_str])
             
-            ws.update(f"A2:E{len(update_rows)+1}", update_rows)
+            safe_api_call(ws.update, f"A2:E{len(update_rows)+1}", update_rows)
             st.cache_data.clear()
             st.success("スプレッドシートのデータを正常に更新しました！")
-            time.sleep(1)
+            time.sleep(0.3)
             st.rerun()
         except Exception as e:
             st.error(f"保存に失敗しました: {e}")
