@@ -55,12 +55,15 @@ except Exception as e:
 # --- サイドバー ---
 if st.sidebar.button("ログアウト"):
     st.session_state["authenticated"] = False
+    for key in list(st.session_state.keys()):
+        if key.startswith("cache_df_"):
+            del st.session_state[key]
     st.rerun()
 
 st.title("⚽ サッカーチーム 背番号管理システム")
 st.markdown("---")
 
-# --- 安全なAPI実行ラッパー（連続操作・レートリミット対策） ---
+# --- 安全なAPI実行ラッパー ---
 def safe_api_call(func, *args, **kwargs):
     max_retries = 4
     for attempt in range(max_retries):
@@ -69,9 +72,9 @@ def safe_api_call(func, *args, **kwargs):
         except Exception as e:
             if attempt == max_retries - 1:
                 raise e
-            time.sleep(1.0 * (attempt + 1))
+            time.sleep(1.5 * (attempt + 1))
 
-# --- ワークシートの安全な取得または作成 ---
+# --- ワークシートの取得 ---
 def get_or_create_worksheet(sheet_name, start_num, end_num):
     def _get_ws():
         try:
@@ -87,47 +90,48 @@ def get_or_create_worksheet(sheet_name, start_num, end_num):
 
     return safe_api_call(_get_ws)
 
-# --- データ取得ヘルパー（高速化・リトライ対応） ---
+# --- セッションステートを利用した高速・API制限完全回避データロード ---
 def load_sheet_data(sheet_name, start_num, end_num):
+    cache_key = f"cache_df_{sheet_name}"
     ws = get_or_create_worksheet(sheet_name, start_num, end_num)
     
-    def _get_records():
-        records = ws.get_all_records()
-        if not records:
-            rows = []
-            for num in range(start_num, end_num + 1):
-                rows.append([num, "", "", "", ""])
-            ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
-            ws.append_rows(rows)
+    if cache_key not in st.session_state:
+        def _get_records():
             records = ws.get_all_records()
-        return records
-
-    try:
-        records = safe_api_call(_get_records)
-    except Exception as e:
-        st.error(f"シート '{sheet_name}' の読み込みに失敗しました: {e}")
-        return ws, pd.DataFrame()
-
-    df = pd.DataFrame(records)
-    
-    if df.empty or "背番号" not in df.columns:
-        df = pd.DataFrame(columns=["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
-
-    # 日付列の安全なパース
-    for col in ["発注日時", "受け渡し日時"]:
-        if col in df.columns and not df.empty:
-            df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
-
-    # 納品列の表示調整
-    if "納品" in df.columns and not df.empty:
-        df["納品"] = df["納品"].astype(str).replace({"✕": None, "None": None, "": None, "nan": None})
-
-    if not df.empty and "受け渡し日時" in df.columns:
-        df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
-    else:
-        df['is_handed'] = False
+            if not records:
+                rows = []
+                for num in range(start_num, end_num + 1):
+                    rows.append([num, "", "", "", ""])
+                ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
+                ws.append_rows(rows)
+                records = ws.get_all_records()
+            return records
         
-    return ws, df
+        try:
+            records = safe_api_call(_get_records)
+        except Exception as e:
+            st.error(f"シート '{sheet_name}' の読み込みに失敗しました: {e}")
+            return ws, pd.DataFrame()
+            
+        df = pd.DataFrame(records)
+        if df.empty or "背番号" not in df.columns:
+            df = pd.DataFrame(columns=["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
+            
+        for col in ["発注日時", "受け渡し日時"]:
+            if col in df.columns and not df.empty:
+                df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
+
+        if "納品" in df.columns and not df.empty:
+            df["納品"] = df["納品"].astype(str).replace({"✕": None, "None": None, "": None, "nan": None})
+
+        if not df.empty and "受け渡し日時" in df.columns:
+            df['is_handed'] = df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
+        else:
+            df['is_handed'] = False
+            
+        st.session_state[cache_key] = df
+        
+    return ws, st.session_state[cache_key]
 
 # --- 5. ページ切り替え（利用中 / 1〜100番 / 101〜200番） ---
 tab_active, tab1, tab2 = st.tabs(["🔥 利用中", "👕 1 〜 100番 管理", "👕 101 〜 200番 管理"])
@@ -248,9 +252,12 @@ def render_uniform_manager(sheet_name, start_num, end_num):
                 update_rows.append([int(b_num), name, ord_str, delivery, hand_str])
             
             safe_api_call(ws.update, f"A2:E{len(update_rows)+1}", update_rows)
-            st.cache_data.clear()
+            
+            updated_full_df['is_handed'] = updated_full_df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
+            st.session_state[f"cache_df_{sheet_name}"] = updated_full_df
+            
             st.success("スプレッドシートのデータを正常に更新しました！")
-            time.sleep(0.3)
+            time.sleep(0.1)
             st.rerun()
         except Exception as e:
             st.error(f"保存に失敗しました: {e}")
