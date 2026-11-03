@@ -93,7 +93,7 @@ def get_or_create_worksheet(sheet_name, start_num, end_num):
             return sh.worksheet(sheet_name)
         except Exception:
             ws = sh.add_worksheet(title=sheet_name, rows=200, cols=10)
-            ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
+            ws.update([["背番号", "名前", "発注日時", "納品", "受け渡し日時"]], "A1:E1")
             rows = []
             for num in range(start_num, end_num + 1):
                 rows.append([num, "", "", "", ""])
@@ -116,7 +116,7 @@ def load_sheet_data(sheet_name, start_num, end_num):
                 rows = []
                 for num in range(start_num, end_num + 1):
                     rows.append([num, "", "", "", ""])
-                ws.update("A1:E1", [["背番号", "名前", "発注日時", "納品", "受け渡し日時"]])
+                ws.update([["背番号", "名前", "発注日時", "納品", "受け渡し日時"]], "A1:E1")
                 ws.append_rows(rows)
                 records = ws.get_all_records()
             return records
@@ -265,10 +265,15 @@ def render_uniform_manager(sheet_name, start_num, end_num):
                 
                 update_rows.append([int(b_num), name, ord_str, delivery, hand_str])
             
-            safe_api_call(ws.update, f"A2:E{len(update_rows)+1}", update_rows)
+            # A2から正確な末尾行までを一括更新（範囲指定の計算ズレを修正）
+            end_row = 1 + len(update_rows)
+            target_range = f"A2:E{end_row}"
+            
+            safe_api_call(ws.update, update_rows, target_range)
             
             updated_full_df['is_handed'] = updated_full_df['受け渡し日時'].apply(lambda x: True if pd.notna(x) and str(x).strip() != "" else False)
             st.session_state[f"cache_df_{sheet_name}"] = updated_full_df
+            
             # 利用中タブ側や他タブのキャッシュも同期させるためにクリア
             for k in list(st.session_state.keys()):
                 if k.startswith("cache_df_") and k != f"cache_df_{sheet_name}":
