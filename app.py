@@ -52,12 +52,9 @@ except Exception as e:
     st.error(f"Googleスプレッドシート接続エラー: {e}")
     st.stop()
 
-# --- サイドバー ---
+# --- サイドバー (ログアウト時にも実データの保存内容が消えないよう認証状態のみ解除) ---
 if st.sidebar.button("ログアウト"):
     st.session_state["authenticated"] = False
-    for key in list(st.session_state.keys()):
-        if key.startswith("cache_df_") or key == "ws_cache":
-            del st.session_state[key]
     st.rerun()
 
 st.title("⚽ サッカーチーム 背番号管理システム")
