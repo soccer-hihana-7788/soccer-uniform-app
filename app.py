@@ -130,7 +130,23 @@ def load_sheet_data(sheet_name, start_num, end_num):
         df = pd.DataFrame(records)
         if df.empty or "背番号" not in df.columns:
             df = pd.DataFrame(columns=["背番号", "名前", "発注日時", "納品", "受け渡し日時"])
+        else:
+            # 【重複防止・正規化ロジック】背番号を数値化し、ダブり行を排除して指定範囲（1〜100など）に収める
+            df["背番号"] = pd.to_numeric(df["背番号"], errors="coerce")
+            df = df.dropna(subset=["背番号"])
+            df["背番号"] = df["背番号"].astype(int)
+            df = df[(df["背番号"] >= start_num) & (df["背番号"] <= end_num)]
+            df = df.drop_duplicates(subset=["背番号"], keep="first").sort_values("背番号").reset_index(drop=True)
             
+            # 不足している背番号があれば補完
+            existing_nums = set(df["背番号"])
+            missing_rows = []
+            for num in range(start_num, end_num + 1):
+                if num not in existing_nums:
+                    missing_rows.append({"背番号": num, "名前": "", "発注日時": "", "納品": "", "受け渡し日時": ""})
+            if missing_rows:
+                df = pd.concat([df, pd.DataFrame(missing_rows)], ignore_index=True).sort_values("背番号").reset_index(drop=True)
+
         for col in ["発注日時", "受け渡し日時"]:
             if col in df.columns and not df.empty:
                 df[col] = pd.to_datetime(df[col].replace(r'^\s*$', None, regex=True), errors='coerce').dt.date
@@ -265,7 +281,7 @@ def render_uniform_manager(sheet_name, start_num, end_num):
                 
                 update_rows.append([int(b_num), name, ord_str, delivery, hand_str])
             
-            # A2から正確な末尾行までを一括更新（範囲指定の計算ズレを修正）
+            # A2から正確な末尾行までを一括更新
             end_row = 1 + len(update_rows)
             target_range = f"A2:E{end_row}"
             
